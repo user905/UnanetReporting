@@ -1,0 +1,239 @@
+import csv
+import requests
+import uuid
+from msal import PublicClientApplication
+from config import (
+    DATAVERSE_URL,
+    DATAVERSE_USERNAME,
+    DATAVERSE_PASSWORD,
+    TABLE_PREFIX,
+    TABLE_NAME,
+    BATCH_SIZE
+)
+
+
+def get_dataverse_token():
+    """Authenticate to Dataverse using username/password"""
+    # Microsoft Dynamics 365 client ID (public client for username/password flow)
+    client_id = "51f81489-12ee-4a9e-aaae-a2591f45987d"
+    authority = "https://login.microsoftonline.com/organizations"
+
+    app = PublicClientApplication(client_id=client_id, authority=authority)
+
+    # Get token using username/password
+    scopes = [f"{DATAVERSE_URL}/.default"]
+    result = app.acquire_token_by_username_password(
+        username=DATAVERSE_USERNAME,
+        password=DATAVERSE_PASSWORD,
+        scopes=scopes
+    )
+
+    if "access_token" in result:
+        return result["access_token"]
+    else:
+        raise Exception(f"Authentication failed: {result.get('error_description', 'Unknown error')}")
+
+
+def convert_to_decimal(value):
+    """Convert string to decimal, return None if empty or invalid"""
+    if not value or value.strip() == "":
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def map_csv_row_to_dataverse(row):
+    """Map CSV columns to Dataverse columns with proper type conversion"""
+    return {
+        f"{TABLE_PREFIX}_projectorganization": row.get("ProjectOrganization") or None,
+        f"{TABLE_PREFIX}_projectcode": row.get("ProjectCode") or None,
+        f"{TABLE_PREFIX}_tasknumber": row.get("TaskNumber") or None,
+        f"{TABLE_PREFIX}_task": row.get("Task") or None,
+        f"{TABLE_PREFIX}_laborcategory": row.get("LaborCategory") or None,
+        f"{TABLE_PREFIX}_location": row.get("Location") or None,
+        f"{TABLE_PREFIX}_projecttype": row.get("ProjectType") or None,
+        f"{TABLE_PREFIX}_paycode": row.get("PayCode") or None,
+        f"{TABLE_PREFIX}_person": row.get("Person") or None,
+        f"{TABLE_PREFIX}_reference": row.get("Reference") or None,
+        f"{TABLE_PREFIX}_date": row.get("Date") or None,
+        f"{TABLE_PREFIX}_adjposteddate": row.get("ADJPostedDate") or None,
+        f"{TABLE_PREFIX}_financialposteddate": row.get("FinancialPostedDate") or None,
+        f"{TABLE_PREFIX}_billingcurrency": row.get("BillingCurrency") or None,
+        f"{TABLE_PREFIX}_billratebc": convert_to_decimal(row.get("BillRateBC")),
+        f"{TABLE_PREFIX}_hours": convert_to_decimal(row.get("Hours")),
+        f"{TABLE_PREFIX}_billamountbc": convert_to_decimal(row.get("BillAmountBC")),
+        f"{TABLE_PREFIX}_billableamountbc": convert_to_decimal(row.get("BillableAmountBC")),
+        f"{TABLE_PREFIX}_localcurrency": row.get("LocalCurrency") or None,
+        f"{TABLE_PREFIX}_billamountlc": convert_to_decimal(row.get("BillAmountLC")),
+        f"{TABLE_PREFIX}_billableamountlc": convert_to_decimal(row.get("BillableAmountLC"))
+    }
+
+
+def read_csv_records(csv_file_path):
+    """Read CSV file and convert to Dataverse records"""
+    print(f"Reading CSV from: {csv_file_path}")
+    records = []
+    with open(csv_file_path, 'r', encoding='utf-8') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            data = map_csv_row_to_dataverse(row)
+            records.append(data)
+    return records
+
+
+def upload_batch(token, batch):
+    """Upload a batch of records to Dataverse"""
+    batch_id = str(uuid.uuid4())
+    changeset_id = str(uuid.uuid4())
+
+    # Build batch request body
+    batch_body = f"--batch_{batch_id}\n"
+    batch_body += f"Content-Type: multipart/mixed; boundary=changeset_{changeset_id}\n\n"
+
+    for idx, record in enumerate(batch):
+        batch_body += f"--changeset_{changeset_id}\n"
+        batch_body += "Content-Type: application/http\n"
+        batch_body += "Content-Transfer-Encoding: binary\n"
+        batch_body += f"Content-ID: {idx + 1}\n\n"
+        batch_body += f"POST {DATAVERSE_URL}/api/data/v9.2/{TABLE_NAME} HTTP/1.1\n"
+        batch_body += "Content-Type: application/json; charset=utf-8\n\n"
+        batch_body += f"{requests.compat.json.dumps(record)}\n"
+
+    batch_body += f"--changeset_{changeset_id}--\n"
+    batch_body += f"--batch_{batch_id}--\n"
+
+    # Send batch request
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": f"multipart/mixed; boundary=batch_{batch_id}",
+        "OData-MaxVersion": "4.0",
+        "OData-Version": "4.0"
+    }
+
+    url = f"{DATAVERSE_URL}/api/data/v9.2/$batch"
+    response = requests.post(url, headers=headers, data=batch_body)
+
+    return response
+
+
+def upload_to_dataverse(csv_file_path):
+    """Read CSV and upload data to Dataverse table using batch requests"""
+    print("\n=== Uploading to Dataverse ===")
+
+    # Get authentication token
+    print("Authenticating to Dataverse...")
+    token = get_dataverse_token()
+
+    # Read CSV file and prepare all records
+    records = read_csv_records(csv_file_path)
+    total_records = len(records)
+    print(f"Found {total_records} records to upload")
+
+    # Upload in batches
+    row_count = 0
+    for i in range(0, total_records, BATCH_SIZE):
+        batch = records[i:i + BATCH_SIZE]
+        response = upload_batch(token, batch)
+
+        if response.status_code in [200, 201, 204]:
+            batch_count = len(batch)
+            row_count += batch_count
+            print(f"  Uploaded batch {i // BATCH_SIZE + 1}: {batch_count} records (Total: {row_count}/{total_records})")
+        else:
+            print(f"  Error uploading batch {i // BATCH_SIZE + 1}: {response.status_code} - {response.text[:500]}")
+
+    print(f"\n✓ Successfully uploaded {row_count} rows to Dataverse table '{TABLE_NAME}'")
+
+
+def delete_records_after_date(date_string, date_field_name=None):
+    """
+    Delete all records from the table where the date is after the specified date
+
+    Args:
+        date_string: Date in format 'YYYY-MM-DD' (e.g., '2024-01-01')
+        date_field_name: Name of the date field to filter on (default: cr834_date)
+    """
+    if date_field_name is None:
+        date_field_name = f"{TABLE_PREFIX}_date"
+
+    print(f"\n=== Deleting Records After {date_string} ===")
+
+    # Get authentication token
+    print("Authenticating to Dataverse...")
+    token = get_dataverse_token()
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "OData-MaxVersion": "4.0",
+        "OData-Version": "4.0",
+        "Content-Type": "application/json; charset=utf-8",
+        "Accept": "application/json"
+    }
+
+    # Query for records after the specified date
+    # Note: Date format in OData filter should be YYYY-MM-DD
+    # Primary key is usually: {table_logical_name}id
+    primary_key_field = f"{TABLE_NAME.rstrip('s')}id"
+    filter_query = f"?$filter={date_field_name} gt '{date_string}'&$select={primary_key_field}"
+    url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE_NAME}{filter_query}"
+
+    print(f"Fetching records where {date_field_name} > {date_string}...")
+    response = requests.get(url, headers=headers)
+
+    if response.status_code != 200:
+        print(f"Error fetching records: {response.status_code} - {response.text}")
+        return
+
+    records = response.json().get('value', [])
+    total_records = len(records)
+
+    if total_records == 0:
+        print(f"No records found with {date_field_name} after {date_string}")
+        return
+
+    print(f"Found {total_records} records to delete")
+
+    # Delete records in batches
+    deleted_count = 0
+    DELETE_BATCH_SIZE = BATCH_SIZE*10
+    for i in range(0, total_records, DELETE_BATCH_SIZE):
+        batch = records[i:i + DELETE_BATCH_SIZE]
+        batch_id = str(uuid.uuid4())
+        changeset_id = str(uuid.uuid4())
+
+        # Build batch delete request body
+        batch_body = f"--batch_{batch_id}\n"
+        batch_body += f"Content-Type: multipart/mixed; boundary=changeset_{changeset_id}\n\n"
+
+        for idx, record in enumerate(batch):
+            record_id = record[primary_key_field]
+            batch_body += f"--changeset_{changeset_id}\n"
+            batch_body += "Content-Type: application/http\n"
+            batch_body += "Content-Transfer-Encoding: binary\n"
+            batch_body += f"Content-ID: {idx + 1}\n\n"
+            batch_body += f"DELETE {DATAVERSE_URL}/api/data/v9.2/{TABLE_NAME}({record_id}) HTTP/1.1\n\n"
+
+        batch_body += f"--changeset_{changeset_id}--\n"
+        batch_body += f"--batch_{batch_id}--\n"
+
+        # Send batch delete request
+        delete_headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": f"multipart/mixed; boundary=batch_{batch_id}",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0"
+        }
+
+        url = f"{DATAVERSE_URL}/api/data/v9.2/$batch"
+        response = requests.post(url, headers=delete_headers, data=batch_body)
+
+        if response.status_code in [200, 201, 204]:
+            batch_count = len(batch)
+            deleted_count += batch_count
+            print(f"  Deleted batch {i // DELETE_BATCH_SIZE + 1}: {batch_count} records (Total: {deleted_count}/{total_records})")
+        else:
+            print(f"  Error deleting batch {i // DELETE_BATCH_SIZE + 1}: {response.status_code} - {response.text[:500]}")
+
+    print(f"\n✓ Successfully deleted {deleted_count} records from table '{TABLE_NAME}'")
