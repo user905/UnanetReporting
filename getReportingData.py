@@ -1,3 +1,10 @@
+"""
+LEGACY FILE - This is the original monolithic script before refactoring.
+Use main.py instead for the current implementation.
+
+This file is kept for reference only.
+"""
+
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 from pathlib import Path
@@ -5,6 +12,7 @@ import csv
 import requests
 from msal import PublicClientApplication
 import uuid
+from logger import setup_logger, get_logger
 
 # === CONFIG ===
 UNANET_URL = "https://goaztech.unanet.biz"
@@ -26,6 +34,7 @@ REPORT_NAME = "EAC Master Report Monthly (SHARED)"  # or whatever you see in the
 
 
 def run():
+    logger = get_logger()
     # Create reports directory if it doesn't exist
     DOWNLOAD_DIR.mkdir(exist_ok=True)
 
@@ -34,12 +43,12 @@ def run():
 
     # Check if today's report already exists
     if final_path.exists():
-        print(f"Found existing report from today: {final_path}")
-        print("Using existing file instead of downloading from Unanet")
+        logger.info(f"Found existing report from today: {final_path}")
+        logger.info("Using existing file instead of downloading from Unanet")
         return final_path
 
     # Download from Unanet if no file exists for today
-    print("No report found for today, downloading from Unanet...")
+    logger.info("No report found for today, downloading from Unanet...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
         context = browser.new_context(accept_downloads=True)
@@ -49,28 +58,28 @@ def run():
         page.goto(f"{UNANET_URL}/goaztech/")
         page.fill('input[name="username"]', UNANET_USERNAME)
         page.fill('input[name="password"]', UNANET_PASSWORD)
-        page.click('#button_ok')  # ✅ click the button by ID
+        page.click('#button_ok')
         page.wait_for_load_state("networkidle")
 
         # === SAVED REPORTS PAGE ===
         page.goto(f"{UNANET_URL}/goaztech/action/reports/saved")
 
         # === CLICK RUN ON REPORT R_91 ===
-        print("Clicking run on saved report...")
+        logger.info("Clicking run on saved report...")
         page.click('tr#R_91 td.icon a[href*="runReport"]')
 
         # === WAIT FOR REPORT PAGE TO LOAD ===
-        print("Waiting for report data to load...")
-        page.wait_for_selector('a[href*="doCSVFile"]', timeout=60000)  # Change if another element is more reliable
+        logger.info("Waiting for report data to load...")
+        page.wait_for_selector('a[href*="doCSVFile"]', timeout=60000)
 
         # === DOWNLOAD CSV ===
-        print("Downloading CSV...")
+        logger.info("Downloading CSV...")
         with page.expect_download() as download_info:
-            page.click('a[href*="doCSVFile"]')  # This triggers javascript:doCSVFile()
+            page.click('a[href*="doCSVFile"]')
 
         download = download_info.value
         download.save_as(final_path)
-        print(f"Downloaded to: {final_path}")
+        logger.info(f"Downloaded to: {final_path}")
 
         browser.close()
 
@@ -80,7 +89,7 @@ def run():
 def get_dataverse_token():
     """Authenticate to Dataverse using username/password"""
     # Microsoft Dynamics 365 client ID (public client for username/password flow)
-    client_id = "51f81489-12ee-4a9e-aaae-a2591f45987d"  # Common Dynamics 365 client ID
+    client_id = "51f81489-12ee-4a9e-aaae-a2591f45987d"
     authority = "https://login.microsoftonline.com/organizations"
 
     app = PublicClientApplication(client_id=client_id, authority=authority)
@@ -101,14 +110,15 @@ def get_dataverse_token():
 
 def upload_to_dataverse(csv_file_path):
     """Read CSV and upload data to Dataverse table using batch requests"""
-    print("\n=== Uploading to Dataverse ===")
+    logger = get_logger()
+    logger.info("=== Uploading to Dataverse ===")
 
     # Get authentication token
-    print("Authenticating to Dataverse...")
+    logger.info("Authenticating to Dataverse...")
     token = get_dataverse_token()
 
     # Read CSV file and prepare all records
-    print(f"Reading CSV from: {csv_file_path}")
+    logger.info(f"Reading CSV from: {csv_file_path}")
     records = []
     with open(csv_file_path, 'r', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile)
@@ -140,7 +150,7 @@ def upload_to_dataverse(csv_file_path):
             records.append(data)
 
     total_records = len(records)
-    print(f"Found {total_records} records to upload")
+    logger.info(f"Found {total_records} records to upload")
 
     # Upload in batches of 100 (Dataverse batch limit is 1000, but 100 is safer)
     BATCH_SIZE = 100
@@ -181,14 +191,17 @@ def upload_to_dataverse(csv_file_path):
         if response.status_code in [200, 201, 204]:
             batch_count = len(batch)
             row_count += batch_count
-            print(f"  Uploaded batch {i // BATCH_SIZE + 1}: {batch_count} records (Total: {row_count}/{total_records})")
+            logger.info(f"  Uploaded batch {i // BATCH_SIZE + 1}: {batch_count} records (Total: {row_count}/{total_records})")
         else:
-            print(f"  Error uploading batch {i // BATCH_SIZE + 1}: {response.status_code} - {response.text[:500]}")
+            logger.error(f"  Error uploading batch {i // BATCH_SIZE + 1}: {response.status_code} - {response.text[:500]}")
 
-    print(f"\n✓ Successfully uploaded {row_count} rows to Dataverse table '{TABLE_NAME}'")
+    logger.info(f"✓ Successfully uploaded {row_count} rows to Dataverse table '{TABLE_NAME}'")
 
 
 if __name__ == "__main__":
+    logger = setup_logger()
+    logger.warning("LEGACY SCRIPT - Consider using main.py instead")
+
     # Download the report from Unanet
     csv_path = run()
 
@@ -196,5 +209,5 @@ if __name__ == "__main__":
     if DATAVERSE_USERNAME and DATAVERSE_PASSWORD:
         upload_to_dataverse(csv_path)
     else:
-        print("\nSkipping Dataverse upload - credentials not configured")
-        print("Please set DATAVERSE_USERNAME and DATAVERSE_PASSWORD in the script")
+        logger.warning("Skipping Dataverse upload - credentials not configured")
+        logger.warning("Please set DATAVERSE_USERNAME and DATAVERSE_PASSWORD in the script")

@@ -10,6 +10,7 @@ from config import (
     TABLE_NAME,
     BATCH_SIZE
 )
+from logger import get_logger
 
 
 def get_dataverse_token():
@@ -73,7 +74,8 @@ def map_csv_row_to_dataverse(row):
 
 def read_csv_records(csv_file_path):
     """Read CSV file and convert to Dataverse records"""
-    print(f"Reading CSV from: {csv_file_path}")
+    logger = get_logger()
+    logger.info(f"Reading CSV from: {csv_file_path}")
     records = []
     with open(csv_file_path, 'r', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile)
@@ -175,10 +177,11 @@ def upload_to_dataverse(csv_file_path, start_date=None, end_date=None):
         start_date: Optional start date (YYYY-MM-DD) to filter records
         end_date: Optional end date (YYYY-MM-DD) to filter records
     """
-    print("\n=== Uploading to Dataverse ===")
+    logger = get_logger()
+    logger.info("=== Uploading to Dataverse ===")
 
     # Get authentication token
-    print("Authenticating to Dataverse...")
+    logger.info("Authenticating to Dataverse...")
     token = get_dataverse_token()
 
     # Read CSV file and prepare all records
@@ -186,14 +189,14 @@ def upload_to_dataverse(csv_file_path, start_date=None, end_date=None):
 
     # Filter by date range if specified
     if start_date and end_date:
-        print(f"Filtering records between {start_date} and {end_date}...")
+        logger.info(f"Filtering records between {start_date} and {end_date}...")
         records = filter_records_by_date(records, start_date, end_date)
 
     total_records = len(records)
-    print(f"Found {total_records} records to upload")
+    logger.info(f"Found {total_records} records to upload")
 
     if total_records == 0:
-        print("No records to upload")
+        logger.warning("No records to upload")
         return
 
     # Upload in batches
@@ -205,11 +208,11 @@ def upload_to_dataverse(csv_file_path, start_date=None, end_date=None):
         if response.status_code in [200, 201, 204]:
             batch_count = len(batch)
             row_count += batch_count
-            print(f"  Uploaded batch {i // BATCH_SIZE + 1}: {batch_count} records (Total: {row_count}/{total_records})")
+            logger.info(f"  Uploaded batch {i // BATCH_SIZE + 1}: {batch_count} records (Total: {row_count}/{total_records})")
         else:
-            print(f"  Error uploading batch {i // BATCH_SIZE + 1}: {response.status_code} - {response.text[:500]}")
+            logger.error(f"  Error uploading batch {i // BATCH_SIZE + 1}: {response.status_code} - {response.text[:500]}")
 
-    print(f"\n✓ Successfully uploaded {row_count} rows to Dataverse table '{TABLE_NAME}'")
+    logger.info(f"✓ Successfully uploaded {row_count} rows to Dataverse table '{TABLE_NAME}'")
 
 
 def delete_records_in_date_range(start_date, end_date, date_field_name=None):
@@ -221,13 +224,15 @@ def delete_records_in_date_range(start_date, end_date, date_field_name=None):
         end_date: End date in format 'YYYY-MM-DD'
         date_field_name: Name of the date field to filter on (default: cr834_date)
     """
+    logger = get_logger()
+
     if date_field_name is None:
         date_field_name = f"{TABLE_PREFIX}_date"
 
-    print(f"\n=== Deleting Records Between {start_date} and {end_date} ===")
+    logger.info(f"=== Deleting Records Between {start_date} and {end_date} ===")
 
     # Get authentication token
-    print("Authenticating to Dataverse...")
+    logger.info("Authenticating to Dataverse...")
     token = get_dataverse_token()
 
     headers = {
@@ -243,21 +248,21 @@ def delete_records_in_date_range(start_date, end_date, date_field_name=None):
     filter_query = f"?$filter={date_field_name} ge '{start_date}' and {date_field_name} le '{end_date}'&$select={primary_key_field}"
     url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE_NAME}{filter_query}"
 
-    print(f"Fetching records where {start_date} <= {date_field_name} <= {end_date}...")
+    logger.info(f"Fetching records where {start_date} <= {date_field_name} <= {end_date}...")
     response = requests.get(url, headers=headers)
 
     if response.status_code != 200:
-        print(f"Error fetching records: {response.status_code} - {response.text}")
+        logger.error(f"Error fetching records: {response.status_code} - {response.text}")
         return
 
     records = response.json().get('value', [])
     total_records = len(records)
 
     if total_records == 0:
-        print(f"No records found in date range {start_date} to {end_date}")
+        logger.info(f"No records found in date range {start_date} to {end_date}")
         return
 
-    print(f"Found {total_records} records to delete")
+    logger.info(f"Found {total_records} records to delete")
 
     # Delete records in batches
     deleted_count = 0
@@ -296,11 +301,11 @@ def delete_records_in_date_range(start_date, end_date, date_field_name=None):
         if response.status_code in [200, 201, 204]:
             batch_count = len(batch)
             deleted_count += batch_count
-            print(f"  Deleted batch {i // DELETE_BATCH_SIZE + 1}: {batch_count} records (Total: {deleted_count}/{total_records})")
+            logger.info(f"  Deleted batch {i // DELETE_BATCH_SIZE + 1}: {batch_count} records (Total: {deleted_count}/{total_records})")
         else:
-            print(f"  Error deleting batch {i // DELETE_BATCH_SIZE + 1}: {response.status_code} - {response.text[:500]}")
+            logger.error(f"  Error deleting batch {i // DELETE_BATCH_SIZE + 1}: {response.status_code} - {response.text[:500]}")
 
-    print(f"\n✓ Successfully deleted {deleted_count} records from table '{TABLE_NAME}'")
+    logger.info(f"✓ Successfully deleted {deleted_count} records from table '{TABLE_NAME}'")
 
 
 def delete_records_after_date(date_string, date_field_name=None):
@@ -311,13 +316,15 @@ def delete_records_after_date(date_string, date_field_name=None):
         date_string: Date in format 'YYYY-MM-DD' (e.g., '2024-01-01')
         date_field_name: Name of the date field to filter on (default: cr834_date)
     """
+    logger = get_logger()
+
     if date_field_name is None:
         date_field_name = f"{TABLE_PREFIX}_date"
 
-    print(f"\n=== Deleting Records After {date_string} ===")
+    logger.info(f"=== Deleting Records After {date_string} ===")
 
     # Get authentication token
-    print("Authenticating to Dataverse...")
+    logger.info("Authenticating to Dataverse...")
     token = get_dataverse_token()
 
     headers = {
@@ -335,21 +342,21 @@ def delete_records_after_date(date_string, date_field_name=None):
     filter_query = f"?$filter={date_field_name} gt '{date_string}'&$select={primary_key_field}"
     url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE_NAME}{filter_query}"
 
-    print(f"Fetching records where {date_field_name} > {date_string}...")
+    logger.info(f"Fetching records where {date_field_name} > {date_string}...")
     response = requests.get(url, headers=headers)
 
     if response.status_code != 200:
-        print(f"Error fetching records: {response.status_code} - {response.text}")
+        logger.error(f"Error fetching records: {response.status_code} - {response.text}")
         return
 
     records = response.json().get('value', [])
     total_records = len(records)
 
     if total_records == 0:
-        print(f"No records found with {date_field_name} after {date_string}")
+        logger.info(f"No records found with {date_field_name} after {date_string}")
         return
 
-    print(f"Found {total_records} records to delete")
+    logger.info(f"Found {total_records} records to delete")
 
     # Delete records in batches
     deleted_count = 0
@@ -388,8 +395,8 @@ def delete_records_after_date(date_string, date_field_name=None):
         if response.status_code in [200, 201, 204]:
             batch_count = len(batch)
             deleted_count += batch_count
-            print(f"  Deleted batch {i // DELETE_BATCH_SIZE + 1}: {batch_count} records (Total: {deleted_count}/{total_records})")
+            logger.info(f"  Deleted batch {i // DELETE_BATCH_SIZE + 1}: {batch_count} records (Total: {deleted_count}/{total_records})")
         else:
-            print(f"  Error deleting batch {i // DELETE_BATCH_SIZE + 1}: {response.status_code} - {response.text[:500]}")
+            logger.error(f"  Error deleting batch {i // DELETE_BATCH_SIZE + 1}: {response.status_code} - {response.text[:500]}")
 
-    print(f"\n✓ Successfully deleted {deleted_count} records from table '{TABLE_NAME}'")
+    logger.info(f"✓ Successfully deleted {deleted_count} records from table '{TABLE_NAME}'")
