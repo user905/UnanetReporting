@@ -118,8 +118,63 @@ def upload_batch(token, batch):
     return response
 
 
-def upload_to_dataverse(csv_file_path):
-    """Read CSV and upload data to Dataverse table using batch requests"""
+def parse_date(date_string):
+    """Parse date string in various formats to YYYY-MM-DD"""
+    from datetime import datetime
+
+    if not date_string:
+        return None
+
+    # Common date formats
+    formats = [
+        "%m/%d/%Y",  # 5/30/2025
+        "%Y-%m-%d",  # 2025-05-30
+        "%m-%d-%Y",  # 5-30-2025
+        "%Y/%m/%d",  # 2025/05/30
+    ]
+
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(date_string.strip(), fmt)
+            return dt.strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+
+    return None
+
+
+def filter_records_by_date(records, start_date, end_date):
+    """Filter records to only include those within the date range"""
+    from datetime import datetime
+
+    if not start_date or not end_date:
+        return records
+
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+
+    filtered_records = []
+    for record in records:
+        date_field = record.get(f"{TABLE_PREFIX}_date")
+        if date_field:
+            parsed_date = parse_date(date_field)
+            if parsed_date:
+                record_dt = datetime.strptime(parsed_date, "%Y-%m-%d")
+                if start_dt <= record_dt <= end_dt:
+                    filtered_records.append(record)
+
+    return filtered_records
+
+
+def upload_to_dataverse(csv_file_path, start_date=None, end_date=None):
+    """
+    Read CSV and upload data to Dataverse table using batch requests
+
+    Args:
+        csv_file_path: Path to the CSV file
+        start_date: Optional start date (YYYY-MM-DD) to filter records
+        end_date: Optional end date (YYYY-MM-DD) to filter records
+    """
     print("\n=== Uploading to Dataverse ===")
 
     # Get authentication token
@@ -128,8 +183,18 @@ def upload_to_dataverse(csv_file_path):
 
     # Read CSV file and prepare all records
     records = read_csv_records(csv_file_path)
+
+    # Filter by date range if specified
+    if start_date and end_date:
+        print(f"Filtering records between {start_date} and {end_date}...")
+        records = filter_records_by_date(records, start_date, end_date)
+
     total_records = len(records)
     print(f"Found {total_records} records to upload")
+
+    if total_records == 0:
+        print("No records to upload")
+        return
 
     # Upload in batches
     row_count = 0
@@ -145,6 +210,97 @@ def upload_to_dataverse(csv_file_path):
             print(f"  Error uploading batch {i // BATCH_SIZE + 1}: {response.status_code} - {response.text[:500]}")
 
     print(f"\n✓ Successfully uploaded {row_count} rows to Dataverse table '{TABLE_NAME}'")
+
+
+def delete_records_in_date_range(start_date, end_date, date_field_name=None):
+    """
+    Delete all records from the table where the date is within the specified range
+
+    Args:
+        start_date: Start date in format 'YYYY-MM-DD'
+        end_date: End date in format 'YYYY-MM-DD'
+        date_field_name: Name of the date field to filter on (default: cr834_date)
+    """
+    if date_field_name is None:
+        date_field_name = f"{TABLE_PREFIX}_date"
+
+    print(f"\n=== Deleting Records Between {start_date} and {end_date} ===")
+
+    # Get authentication token
+    print("Authenticating to Dataverse...")
+    token = get_dataverse_token()
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "OData-MaxVersion": "4.0",
+        "OData-Version": "4.0",
+        "Content-Type": "application/json; charset=utf-8",
+        "Accept": "application/json"
+    }
+
+    # Query for records in the date range
+    primary_key_field = f"{TABLE_NAME.rstrip('s')}id"
+    filter_query = f"?$filter={date_field_name} ge '{start_date}' and {date_field_name} le '{end_date}'&$select={primary_key_field}"
+    url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE_NAME}{filter_query}"
+
+    print(f"Fetching records where {start_date} <= {date_field_name} <= {end_date}...")
+    response = requests.get(url, headers=headers)
+
+    if response.status_code != 200:
+        print(f"Error fetching records: {response.status_code} - {response.text}")
+        return
+
+    records = response.json().get('value', [])
+    total_records = len(records)
+
+    if total_records == 0:
+        print(f"No records found in date range {start_date} to {end_date}")
+        return
+
+    print(f"Found {total_records} records to delete")
+
+    # Delete records in batches
+    deleted_count = 0
+    DELETE_BATCH_SIZE = BATCH_SIZE * 10
+    for i in range(0, total_records, DELETE_BATCH_SIZE):
+        batch = records[i:i + DELETE_BATCH_SIZE]
+        batch_id = str(uuid.uuid4())
+        changeset_id = str(uuid.uuid4())
+
+        # Build batch delete request body
+        batch_body = f"--batch_{batch_id}\n"
+        batch_body += f"Content-Type: multipart/mixed; boundary=changeset_{changeset_id}\n\n"
+
+        for idx, record in enumerate(batch):
+            record_id = record[primary_key_field]
+            batch_body += f"--changeset_{changeset_id}\n"
+            batch_body += "Content-Type: application/http\n"
+            batch_body += "Content-Transfer-Encoding: binary\n"
+            batch_body += f"Content-ID: {idx + 1}\n\n"
+            batch_body += f"DELETE {DATAVERSE_URL}/api/data/v9.2/{TABLE_NAME}({record_id}) HTTP/1.1\n\n"
+
+        batch_body += f"--changeset_{changeset_id}--\n"
+        batch_body += f"--batch_{batch_id}--\n"
+
+        # Send batch delete request
+        delete_headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": f"multipart/mixed; boundary=batch_{batch_id}",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0"
+        }
+
+        url = f"{DATAVERSE_URL}/api/data/v9.2/$batch"
+        response = requests.post(url, headers=delete_headers, data=batch_body)
+
+        if response.status_code in [200, 201, 204]:
+            batch_count = len(batch)
+            deleted_count += batch_count
+            print(f"  Deleted batch {i // DELETE_BATCH_SIZE + 1}: {batch_count} records (Total: {deleted_count}/{total_records})")
+        else:
+            print(f"  Error deleting batch {i // DELETE_BATCH_SIZE + 1}: {response.status_code} - {response.text[:500]}")
+
+    print(f"\n✓ Successfully deleted {deleted_count} records from table '{TABLE_NAME}'")
 
 
 def delete_records_after_date(date_string, date_field_name=None):
