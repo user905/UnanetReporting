@@ -243,20 +243,33 @@ def delete_records_in_date_range(start_date, end_date, date_field_name=None):
         "Accept": "application/json"
     }
 
-    # Query for records in the date range
+    # Query for records in the date range with pagination
     primary_key_field = f"{TABLE_NAME.rstrip('s')}id"
     filter_query = f"?$filter={date_field_name} ge '{start_date}' and {date_field_name} le '{end_date}'&$select={primary_key_field}"
     url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE_NAME}{filter_query}"
 
     logger.info(f"Fetching records where {start_date} <= {date_field_name} <= {end_date}...")
-    response = requests.get(url, headers=headers)
 
-    if response.status_code != 200:
-        logger.error(f"Error fetching records: {response.status_code} - {response.text}")
-        return
+    # Fetch all records using pagination
+    records = []
+    while url:
+        response = requests.get(url, headers=headers)
 
-    records = response.json().get('value', [])
+        if response.status_code != 200:
+            logger.error(f"Error fetching records: {response.status_code} - {response.text}")
+            return
+
+        data = response.json()
+        batch_records = data.get('value', [])
+        records.extend(batch_records)
+
+        # Check for next page
+        url = data.get('@odata.nextLink', None)
+        if url:
+            logger.info(f"  Fetched {len(records)} records so far, fetching more...")
+
     total_records = len(records)
+    logger.info(f"Total records fetched: {total_records}")
 
     if total_records == 0:
         logger.info(f"No records found in date range {start_date} to {end_date}")
@@ -264,9 +277,9 @@ def delete_records_in_date_range(start_date, end_date, date_field_name=None):
 
     logger.info(f"Found {total_records} records to delete")
 
-    # Delete records in batches
+    # Delete records in batches (max 1000 per changeset)
     deleted_count = 0
-    DELETE_BATCH_SIZE = BATCH_SIZE * 10
+    DELETE_BATCH_SIZE = 1000  # Dataverse limit for operations in a changeset
     for i in range(0, total_records, DELETE_BATCH_SIZE):
         batch = records[i:i + DELETE_BATCH_SIZE]
         batch_id = str(uuid.uuid4())
@@ -335,7 +348,7 @@ def delete_records_after_date(date_string, date_field_name=None):
         "Accept": "application/json"
     }
 
-    # Query for records after the specified date
+    # Query for records after the specified date with pagination
     # Note: Date format in OData filter should be YYYY-MM-DD
     # Primary key is usually: {table_logical_name}id
     primary_key_field = f"{TABLE_NAME.rstrip('s')}id"
@@ -343,14 +356,27 @@ def delete_records_after_date(date_string, date_field_name=None):
     url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE_NAME}{filter_query}"
 
     logger.info(f"Fetching records where {date_field_name} > {date_string}...")
-    response = requests.get(url, headers=headers)
 
-    if response.status_code != 200:
-        logger.error(f"Error fetching records: {response.status_code} - {response.text}")
-        return
+    # Fetch all records using pagination
+    records = []
+    while url:
+        response = requests.get(url, headers=headers)
 
-    records = response.json().get('value', [])
+        if response.status_code != 200:
+            logger.error(f"Error fetching records: {response.status_code} - {response.text}")
+            return
+
+        data = response.json()
+        batch_records = data.get('value', [])
+        records.extend(batch_records)
+
+        # Check for next page
+        url = data.get('@odata.nextLink', None)
+        if url:
+            logger.info(f"  Fetched {len(records)} records so far, fetching more...")
+
     total_records = len(records)
+    logger.info(f"Total records fetched: {total_records}")
 
     if total_records == 0:
         logger.info(f"No records found with {date_field_name} after {date_string}")
@@ -358,9 +384,9 @@ def delete_records_after_date(date_string, date_field_name=None):
 
     logger.info(f"Found {total_records} records to delete")
 
-    # Delete records in batches
+    # Delete records in batches (max 1000 per changeset)
     deleted_count = 0
-    DELETE_BATCH_SIZE = BATCH_SIZE*10
+    DELETE_BATCH_SIZE = 1000  # Dataverse limit for operations in a changeset
     for i in range(0, total_records, DELETE_BATCH_SIZE):
         batch = records[i:i + DELETE_BATCH_SIZE]
         batch_id = str(uuid.uuid4())
