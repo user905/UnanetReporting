@@ -86,12 +86,39 @@ UnanetReporting/
 
 ## Setup
 
-### Prerequisites
+### Option 1: Using the Executable (Recommended for End Users)
+
+**Prerequisites:**
+- Google Chrome browser must be installed on the system
+
+**Steps:**
+1. Download the `UnanetSync.exe` file from the `dist/` folder
+2. Create a `.env` file in the same directory as the executable with your credentials:
+   ```
+   UNANET_URL=https://your-instance.unanet.biz
+   UNANET_USERNAME=your-username
+   UNANET_PASSWORD=your-password
+   UNANET_REPORT_ID=R_91
+
+   DATAVERSE_URL=https://your-org.crm.dynamics.com
+   DATAVERSE_USERNAME=your-email@domain.com
+   DATAVERSE_PASSWORD=your-password
+   TABLE_PREFIX=cr834
+   TABLE_NAME=cr834_eacdataraws
+   BATCH_SIZE=500
+   ```
+3. Double-click `UnanetSync.exe` to run
+
+**Note:** The executable will create `reports/` and `logs/` directories automatically in the same location.
+
+### Option 2: Running from Source (For Developers)
+
+#### Prerequisites
 
 - Python 3.8+
 - Chrome/Chromium browser (for Playwright)
 
-### Installation
+#### Installation
 
 1. Clone the repository:
    ```bash
@@ -101,7 +128,7 @@ UnanetReporting/
 
 2. Install required packages:
    ```bash
-   pip install playwright msal requests
+   pip install playwright msal requests python-dotenv
    ```
 
 3. Install Playwright browsers:
@@ -109,23 +136,43 @@ UnanetReporting/
    python -m playwright install
    ```
 
-4. Configure credentials in `config.py`:
-   - Update Unanet credentials
-   - Update Dataverse/PowerApps credentials
-   - Update table prefix and name
+4. Create a `.env` file with your credentials (see example above)
+
+### Building the Executable
+
+To rebuild the executable from source:
+
+1. Install PyInstaller:
+   ```bash
+   pip install pyinstaller
+   ```
+
+2. Build the executable:
+   ```bash
+   python -m PyInstaller UnanetSync.spec --clean
+   ```
+
+3. The executable will be created in the `dist/` directory
 
 ## Usage
 
-### Full Workflow
+### Running the Application
 
-Run the complete process (download + upload):
+**Using the executable:**
+```bash
+UnanetSync.exe
+```
+
+**Running from source:**
 ```bash
 python main.py
 ```
 
 This will:
+- Delete all Dataverse records from the past 365 days
 - Download the latest Unanet report (or use today's cached file)
-- Upload all records to Dataverse in batches
+- Upload only records from the past 365 days to Dataverse in batches
+- Create timestamped logs in the `logs/` directory
 
 ### Testing Workflow
 
@@ -200,22 +247,28 @@ Numeric fields (Hours, BillRate, amounts) are automatically converted from strin
 
 ## Features
 
-- ✅ **Batch Processing** - Uploads 100 records per batch for optimal performance
+- ✅ **Standalone Executable** - No Python installation required for end users
+- ✅ **Rolling 365-Day Window** - Automatically maintains only the past year of data
+- ✅ **Batch Processing** - Uploads/deletes up to 1000 records per batch for optimal performance
+- ✅ **Pagination Support** - Handles datasets larger than 5000 records
 - ✅ **Smart Caching** - Won't re-download reports from the same day
 - ✅ **Type Conversion** - Automatically converts strings to proper data types
+- ✅ **Comprehensive Logging** - Timestamped logs in `/logs` directory
 - ✅ **Error Handling** - Detailed error messages for troubleshooting
+- ✅ **Secure Credentials** - Uses `.env` file for sensitive data
 - ✅ **Safe Deletes** - Test queries before deleting data
 - ✅ **Modular Design** - Separation of concerns for easy maintenance
 
 ## Security Notes
 
-⚠️ **IMPORTANT:** The `config.py` file contains sensitive credentials.
+⚠️ **IMPORTANT:** The `.env` file contains sensitive credentials.
 
 **Recommendations:**
-- Add `config.py` to `.gitignore` before committing
-- Use environment variables for production deployments
-- Consider using Azure Key Vault or similar for credential management
-- Never commit credentials to version control
+- The `.env` file is already in `.gitignore` and should NEVER be committed
+- Store `.env` securely and share it only through secure channels
+- Consider using Azure Key Vault or similar for credential management in enterprise environments
+- Each user should create their own `.env` file with their credentials
+- When distributing the executable, provide a `.env.template` file with placeholder values
 
 ## Troubleshooting
 
@@ -238,13 +291,15 @@ Numeric fields (Hours, BillRate, amounts) are automatically converted from strin
 
 ## Future Enhancements
 
-- [ ] Create standalone executable with PyInstaller
-- [ ] Add logging to file
+- [x] Create standalone executable with PyInstaller
+- [x] Add logging to file
+- [x] Rolling 365-day data window
+- [x] Pagination for large datasets
 - [ ] Support for multiple reports
 - [ ] Scheduled execution (Windows Task Scheduler / cron)
 - [ ] Email notifications on success/failure
 - [ ] Service Principal authentication option
-- [ ] Configuration file encryption
+- [ ] GUI interface for credential configuration
 
 ## License
 

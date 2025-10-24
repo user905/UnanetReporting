@@ -31,7 +31,11 @@ def download_report():
     logger.info("No report found for today, downloading from Unanet...")
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
+            # Use system Chrome instead of Playwright's bundled Chromium
+            browser = p.chromium.launch(
+                headless=False,
+                channel="chrome"  # Use installed Chrome browser
+            )
             context = browser.new_context(accept_downloads=True)
             page = context.new_page()
 

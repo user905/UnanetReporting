@@ -50,3 +50,6 @@ Thumbs.db
 # Playwright
 .pytest_cache/
 playwright/.local-browsers/
+
+# PyInstaller
+*.spec
